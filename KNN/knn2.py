@@ -31,7 +31,7 @@ if __name__=='__main__':
     # PCA, principal components analysis
     # http://blog.jobbole.com/86905/
     # http://ufldl.stanford.edu/wiki/index.php/%E4%B8%BB%E6%88%90%E5%88%86%E5%88%86%E6%9E%90
-    pca = PCA(n_components=0.8)
+    pca = PCA(n_components=0.95)
     train_x = pca.fit_transform(train_data)
     test_x = pca.transform(test_data)
     print type(test_x)

@@ -1,5 +1,7 @@
 #encoding=utf-8
 from PIL import Image,ImageDraw
+import pandas as pd
+import numpy as np
 class decisionNode(object):
     '''
     决策树结点
@@ -22,19 +24,30 @@ def dividedest(rows,column,value):
     '''
     rows_t=[]
     rows_f=[]
-    for row in rows:
-        if isinstance(row[column],int) or isinstance(row[column],float):
-            if row[column]>value:
-                rows_t.append(row)
-            else:
-                rows_f.append(row)
+    rows_none=[]
 
-        else:
-            if row[column]==value:
-                rows_t.append(row)
+    if isinstance(value,int) or isinstance(value,float):
+
+    	for row in rows:
+            #print row[column]
+            if str(row[column])=='nan':
+                rows_none.append(row)
             else:
-                rows_f.append(row)
-    return (rows_t,rows_f)
+                if row[column]>value:
+                    rows_t.append(row)
+                else:
+                    rows_f.append(row)
+
+    else:
+        for row in rows:
+            if str(row[column])=='nan':
+                rows_none.append(row)
+            else:
+                if row[column]==value:
+                    rows_t.append(row)
+                else:
+                    rows_f.append(row)
+    return (rows_t,rows_f,rows_none)
 def countResult(rows):
     '''
     用于统计数据集中的结果分布情况，默认结果位于最后一列
@@ -43,14 +56,12 @@ def countResult(rows):
     counts={}
     for row in rows:
         
-        #print row
         try:
             result=row[-1]
         except:
             result=row
             
-        #print result
-        counts[result]=counts.setdefault(result,1)+1
+        counts[result]=counts.setdefault(result,0)+1
     #print counts
     return counts
         
@@ -72,9 +83,40 @@ def giniimpurity(rows):
 
 def entropy(rows):
     '''
-    熵
+    熵（ID3)
     '''
     
+    from math import log
+    total=len(rows)
+    result=0.0
+    counts_value=countResult(rows)
+    for each in counts_value:
+        p=float(counts_value[each])/total
+        result+=p*log(p,2)
+
+    result=-result
+    return result
+
+def giniRate(rows):
+    '''
+    基尼指数(CART)
+    '''
+    total=len(rows)
+    counts_value=countResult(rows)
+    #print counts_value
+    result=0.0
+    for each in counts_value.values():
+        p=float(each)/total
+        
+        result+=p*p
+    result=1-result
+    return result
+
+def entropyRate(rows,last):
+    '''
+    熵的增益率(C4.5)
+    此处用1-增益率 是为了统一代价函数值愈小愈优的原则
+    '''
     from math import log
     total=len(rows)
     result=0.0
@@ -85,28 +127,35 @@ def entropy(rows):
         result+=p*log(p,2)
 
     result=-result
-    return result
-
-def buildTree(rows,scoref=entropy,threshold=0):
+    return 1-result/last
+    
+def buildTree(rows,scoref=giniRate,threshold=0):
+    
     '''
     递归构造树,scoref评分函数须提示分数越低越好
     '''
     if len(rows)==0:
         return decisionNode()
     current_score=scoref(rows)
-    total=len(rows)
+
+
 
     best_gain=0.0
     best_criteria=None
     best_row=None
     
     for col in range(len(rows[0])-1):
+        
+        '''
+        此total为数据集上该列非空元素个数
+        '''
+        total=len(pd.DataFrame(rows).ix[:,col].notnull())
         elementsInrol=set()
         for row in rows:
             elementsInrol.add(row[col])
-
+        elementsInrol=elementsInrol-set([None])
         for value in elementsInrol:
-            row1,row2=dividedest(rows,col,value)
+            row1,row2,row_none=dividedest(rows,col,value)
 
             p1=len(row1)/total
             mutualInfo=p1*scoref(row1)+(1-p1)*scoref(row2)
@@ -114,16 +163,35 @@ def buildTree(rows,scoref=entropy,threshold=0):
             gain即为信息增益
             mutualInfo为互信息
             '''
+
             gain=current_score-mutualInfo
             if gain>best_gain and len(row1)>0 and len(row2)>0:
 
                 best_gain=gain
                 best_criteria=(col,value)
-                best_row=(row1,row2)
+                best_row=(row1,row2,row_none)
+                best_p=(p1,1-p1)
     
     if best_gain>threshold:
-        trueNode=buildTree(best_row[0])
-        falseNode=buildTree(best_row[1])
+    	'''
+    	处理缺失数据
+    	'''
+
+##    	if len(row_none)>0:
+##    	    for each in row_none:
+##                print best_row[0]
+##    		if each in best_row[0]:
+##                    best_row[0][each]+=best_p[0]
+##    		    print best_p[0]
+##    		else:
+##    		    best_row[0][each]=best_p[0]
+##    		if each in best_row[1]:
+##    		    best_row[1][each]+=best_p[1]
+##    		else:
+##    		    best_row[1][each]=best_p[1]
+
+        trueNode=buildTree(best_row[0],threshold=threshold)
+        falseNode=buildTree(best_row[1],threshold=threshold)
 
         return decisionNode(col=best_criteria[0],value=best_criteria[1],tNode=trueNode,fNode=falseNode)
         
@@ -134,25 +202,53 @@ def buildTree(rows,scoref=entropy,threshold=0):
             
             
         
-def classify(tree,test):
+def classify(tree,test,output='dict'):
     '''
     输入测试数据及树，输出分类结果
+    支持对含缺失数据的分类
     '''
-    res=None
+    
+
     if tree.result!=None:
-        #print tree.result
+
         return tree.result
     else:
-        if isinstance(tree.value,int) or isinstance(tree.value,float):
-            if test[tree.col]>tree.value:
-                res=classify(tree.tNode,test)
+        if tree.value==None:
+            tr,tb=classify(tree.tNode,test),classify(tree.fNode,test)
+            tnums=sum(tr.values())
+            fnums=sum(tb.values())
+            tweight=tnums/(tnums+fnums)
+            fweight=fnums/(tnums+fnums)
+            res={}
+            '''
+            待优化
+            '''
+            for each in tr:
+                res[each]+=tr[each]*tweight
+
+                    
+            for each in fr:
+                if each in res:
+                    res[each]+=tr[each]*fweight
+                else:
+                    res[each]=0    
+            return res
+
+        else:    
+            if isinstance(tree.value,int) or isinstance(tree.value,float):
+                if test[tree.col]>tree.value:
+                    res=classify(tree.tNode,test)
+                else:
+                    res=classify(tree.fNode,test)
             else:
-                res=classify(tree.fNode,test)
-        else:
-            if  test[tree.col]==tree.value:
-                res=classify(tree.tNode,test)
-            else:
-                res=classify(tree.fNode,test)
+                if  test[tree.col]==tree.value:
+                    res=classify(tree.tNode,test)
+                else:
+                    res=classify(tree.fNode,test)
+
+    if output!='dict':
+        res=sorted(res.iteritems(),key=lambda x:x[1],reverse=True)[0][0]
+
     return res
 
 def prune(tree,threshold=0,scoref=entropy):
@@ -243,6 +339,6 @@ def drawnode(draw,tree,x,y):
         txt=' \n'.join(['%s:%d'%v for v in tree.result.items()])
         draw.text((x-20,y),txt,(0,0,0))
 
-@property
+
 def size(tree):
     return(getwidth(tree),getdeepth(tree))
